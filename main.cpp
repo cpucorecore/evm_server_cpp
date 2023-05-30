@@ -2,19 +2,14 @@
 #include "state/rlp.hpp"
 #include "evmone/evmone.h"
 
-#include <iostream>
-
-#include "fields_alloc.hpp"
-
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/version.hpp>
 #include <boost/asio.hpp>
 #include <chrono>
 #include <cstdlib>
-#include <cstring>
+#include <ctime>
 #include <iostream>
-#include <list>
 #include <memory>
 #include <string>
 
@@ -25,316 +20,216 @@ using tcp = boost::asio::ip::tcp;       // from <boost/asio/ip/tcp.hpp>
 
 using namespace evmone;
 
-beast::string_view
-mime_type(beast::string_view path)
+namespace my_program_state
 {
-    using beast::iequals;
-    auto const ext = [&path]
+    std::size_t
+    request_count()
     {
-        auto const pos = path.rfind(".");
-        if(pos == beast::string_view::npos)
-            return beast::string_view{};
-        return path.substr(pos);
-    }();
-    if(iequals(ext, ".htm"))  return "text/html";
-    if(iequals(ext, ".html")) return "text/html";
-    if(iequals(ext, ".php"))  return "text/html";
-    if(iequals(ext, ".css"))  return "text/css";
-    if(iequals(ext, ".txt"))  return "text/plain";
-    if(iequals(ext, ".js"))   return "application/javascript";
-    if(iequals(ext, ".json")) return "application/json";
-    if(iequals(ext, ".xml"))  return "application/xml";
-    if(iequals(ext, ".swf"))  return "application/x-shockwave-flash";
-    if(iequals(ext, ".flv"))  return "video/x-flv";
-    if(iequals(ext, ".png"))  return "image/png";
-    if(iequals(ext, ".jpe"))  return "image/jpeg";
-    if(iequals(ext, ".jpeg")) return "image/jpeg";
-    if(iequals(ext, ".jpg"))  return "image/jpeg";
-    if(iequals(ext, ".gif"))  return "image/gif";
-    if(iequals(ext, ".bmp"))  return "image/bmp";
-    if(iequals(ext, ".ico"))  return "image/vnd.microsoft.icon";
-    if(iequals(ext, ".tiff")) return "image/tiff";
-    if(iequals(ext, ".tif"))  return "image/tiff";
-    if(iequals(ext, ".svg"))  return "image/svg+xml";
-    if(iequals(ext, ".svgz")) return "image/svg+xml";
-    return "application/text";
+        static std::size_t count = 0;
+        return ++count;
+    }
+
+    std::time_t
+    now()
+    {
+        return std::time(0);
+    }
 }
 
-class http_worker
+class http_connection : public std::enable_shared_from_this<http_connection>
 {
 public:
-    http_worker(http_worker const&) = delete;
-    http_worker& operator=(http_worker const&) = delete;
-
-    http_worker(tcp::acceptor& acceptor, const std::string& doc_root) :
-            acceptor_(acceptor),
-            doc_root_(doc_root)
+    http_connection(tcp::socket socket)
+            : socket_(std::move(socket))
     {
     }
 
-    void start()
+    // Initiate the asynchronous operations associated with the connection.
+    void
+    start()
     {
-        accept();
+        read_request();
         check_deadline();
     }
 
 private:
-    using alloc_t = fields_alloc<char>;
-    //using request_body_t = http::basic_dynamic_body<beast::flat_static_buffer<1024 * 1024>>;
-    using request_body_t = http::string_body;
-
-    // The acceptor used to listen for incoming connections.
-    tcp::acceptor& acceptor_;
-
-    // The path to the root of the document directory.
-    std::string doc_root_;
-
     // The socket for the currently connected client.
-    tcp::socket socket_{acceptor_.get_executor()};
+    tcp::socket socket_;
 
-    // The buffer for performing reads
-    beast::flat_static_buffer<8192> buffer_;
+    // The buffer for performing reads.
+    beast::flat_buffer buffer_{8192};
 
-    // The allocator used for the fields in the request and reply.
-    alloc_t alloc_{8192};
+    // The request message.
+    http::request<http::dynamic_body> request_;
 
-    // The parser for reading the requests
-    boost::optional<http::request_parser<request_body_t, alloc_t>> parser_;
+    // The response message.
+    http::response<http::dynamic_body> response_;
 
-    // The timer putting a time limit on requests.
-    net::steady_timer request_deadline_{
-            acceptor_.get_executor(), (std::chrono::steady_clock::time_point::max)()};
+    // The timer for putting a deadline on connection processing.
+    net::steady_timer deadline_{
+            socket_.get_executor(), std::chrono::seconds(60)};
 
-    // The string-based response message.
-    boost::optional<http::response<http::string_body, http::basic_fields<alloc_t>>> string_response_;
-
-    // The string-based response serializer.
-    boost::optional<http::response_serializer<http::string_body, http::basic_fields<alloc_t>>> string_serializer_;
-
-    // The file-based response message.
-    boost::optional<http::response<http::file_body, http::basic_fields<alloc_t>>> file_response_;
-
-    // The file-based response serializer.
-    boost::optional<http::response_serializer<http::file_body, http::basic_fields<alloc_t>>> file_serializer_;
-
-    void accept()
+    // Asynchronously receive a complete request message.
+    void
+    read_request()
     {
-        // Clean up any previous connection.
-        beast::error_code ec;
-        socket_.close(ec);
-        buffer_.consume(buffer_.size());
-
-        acceptor_.async_accept(
-                socket_,
-                [this](beast::error_code ec)
-                {
-                    if (ec)
-                    {
-                        accept();
-                    }
-                    else
-                    {
-                        // Request must be fully processed within 60 seconds.
-                        request_deadline_.expires_after(
-                                std::chrono::seconds(60));
-
-                        read_request();
-                    }
-                });
-    }
-
-    void read_request()
-    {
-        // On each read the parser needs to be destroyed and
-        // recreated. We store it in a boost::optional to
-        // achieve that.
-        //
-        // Arguments passed to the parser constructor are
-        // forwarded to the message object. A single argument
-        // is forwarded to the body constructor.
-        //
-        // We construct the dynamic body with a 1MB limit
-        // to prevent vulnerability to buffer attacks.
-        //
-        parser_.emplace(
-                std::piecewise_construct,
-                std::make_tuple(),
-                std::make_tuple(alloc_));
+        auto self = shared_from_this();
 
         http::async_read(
                 socket_,
                 buffer_,
-                *parser_,
-                [this](beast::error_code ec, std::size_t)
+                request_,
+                [self](beast::error_code ec,
+                       std::size_t bytes_transferred)
                 {
-                    if (ec)
-                        accept();
-                    else
-                        process_request(parser_->get());
+                    boost::ignore_unused(bytes_transferred);
+                    if(!ec)
+                        self->process_request();
                 });
     }
 
-    void process_request(http::request<request_body_t, http::basic_fields<alloc_t>> const& req)
+    // Determine what needs to be done with the request message.
+    void
+    process_request()
     {
-        switch (req.method())
+        response_.version(request_.version());
+        response_.keep_alive(false);
+
+        switch(request_.method())
         {
             case http::verb::get:
-                send_file(req.target());
+                response_.result(http::status::ok);
+                response_.set(http::field::server, "Beast");
+                create_response();
                 break;
 
             default:
                 // We return responses indicating an error if
                 // we do not recognize the request method.
-                send_bad_response(
-                        http::status::bad_request,
-                        "Invalid request-method '" + std::string(req.method_string()) + "'\r\n");
+                response_.result(http::status::bad_request);
+                response_.set(http::field::content_type, "text/plain");
+                beast::ostream(response_.body())
+                        << "Invalid request-method '"
+                        << std::string(request_.method_string())
+                        << "'";
                 break;
         }
+
+        write_response();
     }
 
-    void send_bad_response(
-            http::status status,
-            std::string const& error)
+    // Construct a response message based on the program state.
+    void
+    create_response()
     {
-        string_response_.emplace(
-                std::piecewise_construct,
-                std::make_tuple(),
-                std::make_tuple(alloc_));
+        if(request_.target() == "/count")
+        {
+            response_.set(http::field::content_type, "text/html");
+            beast::ostream(response_.body())
+                    << "<html>\n"
+                    <<  "<head><title>Request count</title></head>\n"
+                    <<  "<body>\n"
+                    <<  "<h1>Request count</h1>\n"
+                    <<  "<p>There have been "
+                    <<  my_program_state::request_count()
+                    <<  " requests so far.</p>\n"
+                    <<  "</body>\n"
+                    <<  "</html>\n";
+        }
+        else if(request_.target() == "/time")
+        {
+            response_.set(http::field::content_type, "text/html");
+            beast::ostream(response_.body())
+                    <<  "<html>\n"
+                    <<  "<head><title>Current time</title></head>\n"
+                    <<  "<body>\n"
+                    <<  "<h1>Current time</h1>\n"
+                    <<  "<p>The current time is "
+                    <<  my_program_state::now()
+                    <<  " seconds since the epoch.</p>\n"
+                    <<  "</body>\n"
+                    <<  "</html>\n";
+        }
+        else
+        {
+            response_.result(http::status::not_found);
+            response_.set(http::field::content_type, "text/plain");
+            beast::ostream(response_.body()) << "File not found\r\n";
+        }
+    }
 
-        string_response_->result(status);
-        string_response_->keep_alive(false);
-        string_response_->set(http::field::server, "Beast");
-        string_response_->set(http::field::content_type, "text/plain");
-        string_response_->body() = error;
-        string_response_->prepare_payload();
+    void
+    write_response()
+    {
+        auto self = shared_from_this();
 
-        string_serializer_.emplace(*string_response_);
+        response_.content_length(response_.body().size());
 
         http::async_write(
                 socket_,
-                *string_serializer_,
-                [this](beast::error_code ec, std::size_t)
+                response_,
+                [self](beast::error_code ec, std::size_t)
                 {
-                    socket_.shutdown(tcp::socket::shutdown_send, ec);
-                    string_serializer_.reset();
-                    string_response_.reset();
-                    accept();
+                    self->socket_.shutdown(tcp::socket::shutdown_send, ec);
+                    self->deadline_.cancel();
                 });
     }
 
-    void send_file(beast::string_view target)
+    // Check whether we have spent enough time on this connection.
+    void
+    check_deadline()
     {
-        // Request path must be absolute and not contain "..".
-        if (target.empty() || target[0] != '/' || target.find("..") != std::string::npos)
-        {
-            send_bad_response(
-                    http::status::not_found,
-                    "File not found\r\n");
-            return;
-        }
+        auto self = shared_from_this();
 
-        std::string full_path = doc_root_;
-        full_path.append(
-                target.data(),
-                target.size());
-
-        http::file_body::value_type file;
-        beast::error_code ec;
-        file.open(
-                full_path.c_str(),
-                beast::file_mode::read,
-                ec);
-        if(ec)
-        {
-            send_bad_response(
-                    http::status::not_found,
-                    "File not found\r\n");
-            return;
-        }
-
-        file_response_.emplace(
-                std::piecewise_construct,
-                std::make_tuple(),
-                std::make_tuple(alloc_));
-
-        file_response_->result(http::status::ok);
-        file_response_->keep_alive(false);
-        file_response_->set(http::field::server, "Beast");
-        file_response_->set(http::field::content_type, mime_type(std::string(target)));
-        file_response_->body() = std::move(file);
-        file_response_->prepare_payload();
-
-        file_serializer_.emplace(*file_response_);
-
-        http::async_write(
-                socket_,
-                *file_serializer_,
-                [this](beast::error_code ec, std::size_t)
+        deadline_.async_wait(
+                [self](beast::error_code ec)
                 {
-                    socket_.shutdown(tcp::socket::shutdown_send, ec);
-                    file_serializer_.reset();
-                    file_response_.reset();
-                    accept();
-                });
-    }
-
-    void check_deadline()
-    {
-        // The deadline may have moved, so check it has really passed.
-        if (request_deadline_.expiry() <= std::chrono::steady_clock::now())
-        {
-            // Close socket to cancel any outstanding operation.
-            socket_.close();
-
-            // Sleep indefinitely until we're given a new deadline.
-            request_deadline_.expires_at(
-                    (std::chrono::steady_clock::time_point::max)());
-        }
-
-        request_deadline_.async_wait(
-                [this](beast::error_code)
-                {
-                    check_deadline();
+                    if(!ec)
+                    {
+                        // Close socket to cancel any outstanding operation.
+                        self->socket_.close(ec);
+                    }
                 });
     }
 };
 
+void
+http_server(tcp::acceptor& acceptor, tcp::socket& socket)
+{
+    acceptor.async_accept(socket,
+                          [&](beast::error_code ec)
+                          {
+                              if(!ec)
+                                  std::make_shared<http_connection>(std::move(socket))->start();
+                              http_server(acceptor, socket);
+                          });
+}
+
 int main(int argc, char* argv[]) {
     try
     {
-        // Check command line arguments.
-        if (argc != 6)
+        if(argc != 3)
         {
-            std::cerr << "Usage: http_server_fast <address> <port> <doc_root> <num_workers> {spin|block}\n";
+            std::cerr << "Usage: " << argv[0] << " <address> <port>\n";
             std::cerr << "  For IPv4, try:\n";
-            std::cerr << "    http_server_fast 0.0.0.0 80 . 100 block\n";
+            std::cerr << "    receiver 0.0.0.0 80\n";
             std::cerr << "  For IPv6, try:\n";
-            std::cerr << "    http_server_fast 0::0 80 . 100 block\n";
+            std::cerr << "    receiver 0::0 80\n";
             return EXIT_FAILURE;
         }
 
         auto const address = net::ip::make_address(argv[1]);
         unsigned short port = static_cast<unsigned short>(std::atoi(argv[2]));
-        std::string doc_root = argv[3];
-        int num_workers = std::atoi(argv[4]);
-        bool spin = (std::strcmp(argv[5], "spin") == 0);
 
         net::io_context ioc{1};
+
         tcp::acceptor acceptor{ioc, {address, port}};
+        tcp::socket socket{ioc};
+        http_server(acceptor, socket);
 
-        std::list<http_worker> workers;
-        for (int i = 0; i < num_workers; ++i)
-        {
-            workers.emplace_back(acceptor, doc_root);
-            workers.back().start();
-        }
-
-        if (spin)
-            for (;;) ioc.poll();
-        else
-            ioc.run();
+        ioc.run();
     }
-    catch (const std::exception& e)
+    catch(std::exception const& e)
     {
         std::cerr << "Error: " << e.what() << std::endl;
         return EXIT_FAILURE;
