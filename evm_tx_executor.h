@@ -13,6 +13,11 @@
 const int64_t BLOCK_GAS_LIMIT = 1000000000000;
 const int64_t DEFAULT_BALANCE = 100000000;
 
+struct tx_result {
+    evmone::state::TransactionReceipt receipt;
+    evmc::address addr_created;
+};
+
 class evm_tx_executor {
 public:
     evm_tx_executor() : vm(evmc_create_evmone()){
@@ -20,7 +25,7 @@ public:
     };
 
     evmone::state::Account& create_account(evmc::address addr, uint64_t nonce = 0, uint64_t balance = DEFAULT_BALANCE);
-    void execute_tx(const evmone::state::Transaction &tx, evmc_revision rev = EVMC_CANCUN);
+    std::variant<tx_result, std::error_code> execute_tx(const evmone::state::Transaction &tx, evmc_revision rev = EVMC_CANCUN);
 
 private:
     evmone::state::BlockInfo block;

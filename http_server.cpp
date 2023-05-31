@@ -3,7 +3,7 @@
 //
 
 #include "http_server.h"
-#include "evm_tx_executor.h"
+#include "evm_request_processor.h"
 #include <nlohmann/json.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
@@ -14,10 +14,7 @@ namespace beast = boost::beast;         // from <boost/beast.hpp>
 namespace http = beast::http;           // from <boost/beast/http.hpp>
 namespace net = boost::asio;            // from <boost/asio.hpp>
 using tcp = boost::asio::ip::tcp;       // from <boost/asio/ip/tcp.hpp>
-using namespace evmone;
 using json = nlohmann::json;
-
-namespace beast = boost::beast;
 
 namespace my_program_state
 {
@@ -33,9 +30,9 @@ namespace my_program_state
     {
         return std::time(0);
     }
-
-    evm_tx_executor executor;
 }
+
+evm_request_processor processor;
 
 class http_connection : public std::enable_shared_from_this<http_connection>
 {
@@ -91,96 +88,43 @@ private:
     }
 
     // Determine what needs to be done with the request message.
-    void
-    process_request()
-    {
-        response_.version(request_.version());
+    void process_request() {
+        std::cout << "uri:" << request_.target() << std::endl;
+
         response_.keep_alive(false);
+        response_.result(http::status::ok);
+        response_.set(http::field::server, "evm");
+        response_.set(boost::beast::http::field::content_type, "application/json");
 
-        switch(request_.method())
-        {
-            case http::verb::get:
-                response_.result(http::status::ok);
-                response_.set(http::field::server, "Beast");
-                create_response();
-                break;
+        json resp_json;
+        resp_json["rc"] = HTTP_SUCCESS;
 
-            case http::verb::post:
-                response_.result(http::status::ok);
-                response_.set(http::field::server, "Beast");
-                response_.set(boost::beast::http::field::content_type, "application/json");
-                try
-                {
-                    nlohmann::json payload = nlohmann::json::parse(request_.body());
-                    std::cout << "Received JSON payload: " << payload.dump() << std::endl;
-
-                    std::cout << "uri:" << request_.target() << std::endl;
-                    if(request_.target() == "/contract/create") {
-                        auto from = payload["from"].get<std::string>();
-                        auto code = payload["code"].get<std::string_view>();
-                        auto addr = operator""_address(from.c_str());
-                        auto acc = my_program_state::executor.create_account(addr);
-                        auto code_bytes = evmc::from_hex(code);
-                        evmone::state::Transaction tx{
-                                .kind = evmone::state::Transaction::Kind::legacy,
-                                .data = code_bytes.value(),
-                                .gas_limit = 2000000,
-                                .max_gas_price = 20,
-                                .max_priority_gas_price = 10,
-                                .sender = addr,
-                                .to = std::nullopt,
-                                .value = 0,
-                                .chain_id = 0,
-                                .nonce = acc.nonce,
-                        };
-                        my_program_state::executor.execute_tx(tx);
-                    } else if(request_.target() == "/contract/call") {
-                        auto from = payload["from"].get<std::string>();
-                        auto to = payload["to"].get<std::string>();
-                        auto input = payload["input"].get<std::string_view>();
-                        auto from_addr = operator""_address(from.c_str());
-                        auto to_addr = operator""_address(from.c_str());
-                        auto acc = my_program_state::executor.create_account(from_addr);
-                        auto input_bytes = evmc::from_hex(input);
-                        evmone::state::Transaction tx{
-                                .kind = evmone::state::Transaction::Kind::legacy,
-                                .data = input_bytes.value(),
-                                .gas_limit = 2000000,
-                                .max_gas_price = 20,
-                                .max_priority_gas_price = 10,
-                                .sender = from_addr,
-                                .to = to_addr,
-                                .value = 0,
-                                .chain_id = 0,
-                                .nonce = acc.nonce,
-                        };
-                        my_program_state::executor.execute_tx(tx);
-                    } else {
-                        // TODO
-                    }
-                    json response_payload;
-                    response_payload["status"] = "success";
-                    response_payload["message"] = "Received JSON payload successfully";
-
-                    beast::ostream(response_.body()) << response_payload;
-                }
-                catch (json::parse_error& e)
-                {
+        switch(request_.method()) {
+            case http::verb::post: {
+                auto ret = processor.do_request(request_.target(), request_.body().c_str());
+                if (holds_alternative<json>(ret)) {
+                    auto ret_json = std::get<json>(ret);
+                    resp_json["err_message"] = "";
+                    resp_json["result"] = ret_json;
+                } else {
                     response_.result(http::status::bad_request);
-                    beast::ostream(response_.body()) << "Invalid JSON payload";
+                    auto err = std::get<std::error_code>(ret);
+                    resp_json["rc"] = EVM_ERROR_CODE_BASE + err.value();
+                    resp_json["err_message"] = err.message();
+                    beast::ostream(response_.body()) << err;
                 }
+
                 break;
+            }
 
             default:
                 response_.result(http::status::bad_request);
-                response_.set(http::field::content_type, "text/plain");
-                beast::ostream(response_.body())
-                        << "Invalid request-method '"
-                        << std::string(request_.method_string())
-                        << "'";
+                resp_json["rc"] = UNSUPPORTED_HTTP_METHOD;
+                resp_json["err_message"] = std::string("unsupported http request, must post request");
                 break;
         }
 
+        beast::ostream(response_.body()) << resp_json;
         write_response();
     }
 

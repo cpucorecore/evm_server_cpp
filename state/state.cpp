@@ -136,6 +136,12 @@ void finalize(State& state, evmc_revision rev, const address& coinbase,
         state.touch(withdrawal.recipient).balance += withdrawal.get_amount();
 }
 
+evmc_address addr_created;
+
+const evmc_address& get_address_created() {
+    return addr_created;
+}
+
 std::variant<TransactionReceipt, std::error_code> transition(
     State& state, const BlockInfo& block, const Transaction& tx, evmc_revision rev, evmc::VM& vm)
 {
@@ -178,6 +184,9 @@ std::variant<TransactionReceipt, std::error_code> transition(
         host.access_account(block.coinbase);
 
     const auto result = host.call(build_message(tx, execution_gas_limit));
+    if(!tx.to.has_value()) {
+        addr_created = result.create_address;
+    }
 
     auto gas_used = tx.gas_limit - result.gas_left;
 

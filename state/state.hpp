@@ -139,6 +139,8 @@ struct TransactionReceipt
 void finalize(State& state, evmc_revision rev, const address& coinbase,
     std::optional<uint64_t> block_reward, std::span<Withdrawal> withdrawals);
 
+const evmc_address& get_address_created();
+
 [[nodiscard]] std::variant<TransactionReceipt, std::error_code> transition(
     State& state, const BlockInfo& block, const Transaction& tx, evmc_revision rev, evmc::VM& vm);
 
