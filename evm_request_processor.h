@@ -48,13 +48,13 @@ inline std::error_code make_error_code(ErrorCode ec) noexcept {
     return {ec, category};
 }
 
-const auto URI_CONTRACT_CREATE = "/contract/create";
-const auto URI_CONTRACT_CALL = "/contract/call";
+const std::string URI_CONTRACT_CREATE = "/contract/create";
+const std::string URI_CONTRACT_CALL = "/contract/call";
 
 
 class evm_request_processor {
 public:
-    std::variant<json, std::error_code> do_request(const boost::string_view &uri, const char *req);
+    std::variant<json, std::error_code> do_request(const std::string &uri, const char *req);
 
 private:
     evm_tx_executor executor;

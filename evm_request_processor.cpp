@@ -13,9 +13,9 @@ using std::endl;
 
 using namespace evmone;
 
-const std::set<const boost::string_view> uris_supported = {URI_CONTRACT_CREATE, URI_CONTRACT_CALL};
+const std::set<std::string> uris_supported = {URI_CONTRACT_CREATE, URI_CONTRACT_CALL};
 
-std::variant<json, std::error_code> evm_request_processor::do_request(const boost::string_view &uri, const char *req) {
+std::variant<json, std::error_code> evm_request_processor::do_request(const std::string &uri, const char *req) {
     cout << "uri:[" << uri << "], request_json body:[" << req << "]" << endl;
 
     if(!uris_supported.contains(uri)) {

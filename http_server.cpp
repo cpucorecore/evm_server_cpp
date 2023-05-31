@@ -101,7 +101,7 @@ private:
 
         switch(request_.method()) {
             case http::verb::post: {
-                auto ret = processor.do_request(request_.target(), request_.body().c_str());
+                auto ret = processor.do_request(request_.target().to_string(), request_.body().c_str());
                 if (holds_alternative<json>(ret)) {
                     auto ret_json = std::get<json>(ret);
                     resp_json["err_message"] = "";
