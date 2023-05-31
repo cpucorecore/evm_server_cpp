@@ -128,46 +128,6 @@ private:
         write_response();
     }
 
-    // Construct a response message based on the program state.
-    void
-    create_response()
-    {
-        if(request_.target() == "/count")
-        {
-            response_.set(http::field::content_type, "text/html");
-            beast::ostream(response_.body())
-                    << "<html>\n"
-                    <<  "<head><title>Request count</title></head>\n"
-                    <<  "<body>\n"
-                    <<  "<h1>Request count</h1>\n"
-                    <<  "<p>There have been "
-                    <<  my_program_state::request_count()
-                    <<  " requests so far.</p>\n"
-                    <<  "</body>\n"
-                    <<  "</html>\n";
-        }
-        else if(request_.target() == "/time")
-        {
-            response_.set(http::field::content_type, "text/html");
-            beast::ostream(response_.body())
-                    <<  "<html>\n"
-                    <<  "<head><title>Current time</title></head>\n"
-                    <<  "<body>\n"
-                    <<  "<h1>Current time</h1>\n"
-                    <<  "<p>The current time is "
-                    <<  my_program_state::now()
-                    <<  " seconds since the epoch.</p>\n"
-                    <<  "</body>\n"
-                    <<  "</html>\n";
-        }
-        else
-        {
-            response_.result(http::status::not_found);
-            response_.set(http::field::content_type, "text/plain");
-            beast::ostream(response_.body()) << "File not found\r\n";
-        }
-    }
-
     void
     write_response()
     {
@@ -206,8 +166,7 @@ private:
 void http_server(tcp::acceptor& acceptor, tcp::socket& socket)
 {
     acceptor.async_accept(socket,
-                          [&](beast::error_code ec)
-                          {
+                          [&](beast::error_code ec) {
                               if(!ec)
                                   std::make_shared<http_connection>(std::move(socket))->start();
                               http_server(acceptor, socket);
