@@ -42,6 +42,6 @@ add_subdirectory(state)
 hunter_add_package(Beast)
 find_package(Beast CONFIG REQUIRED)
 
-add_executable(evm_server_cpp main.cpp http_server.cpp http_server.h evm_tx_executor.cpp evm_tx_executor.h evm_request_processor.cpp evm_request_processor.h help_message.h)
+add_executable(evm_server_cpp main.cpp http_server.cpp http_server.h evm_tx_executor.cpp evm_tx_executor.h evm_request_processor.cpp evm_request_processor.h help_message.h help_message.cpp)
 target_link_libraries(evm_server_cpp PRIVATE Beast::Beast evmone::state nlohmann_json::nlohmann_json)
 target_link_libraries(evm_server_cpp PRIVATE evmc::evmc evmone)

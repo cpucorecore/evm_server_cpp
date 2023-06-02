@@ -5,7 +5,9 @@
 #ifndef EVM_SERVER_CPP_HELP_MESSAGE_H
 #define EVM_SERVER_CPP_HELP_MESSAGE_H
 
-static constexpr auto help_message = R"delimiter(
+#include <string>
+
+static constexpr auto default_help_message = R"delimiter(
 <html>
 <head><title>evm server help</title></head>
 
@@ -42,6 +44,8 @@ call_contract.json:<br/><br/>
 </body>
 </html>
 
-        )delimiter";
+)delimiter";
+
+const std::string& load_help_html_file();
 
 #endif //EVM_SERVER_CPP_HELP_MESSAGE_H

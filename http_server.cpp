@@ -122,7 +122,7 @@ private:
 
             default:
                 response_.set(boost::beast::http::field::content_type, "text/html");
-                beast::ostream(response_.body()) << help_message;
+                beast::ostream(response_.body()) << load_help_html_file();
                 break;
         }
 
