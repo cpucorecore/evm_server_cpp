@@ -2,6 +2,7 @@
 // Created by sky on 2023/5/30.
 //
 
+#include "help_message.h"
 #include "http_server.h"
 #include "evm_request_processor.h"
 #include <nlohmann/json.hpp>
@@ -87,6 +88,7 @@ private:
                 });
     }
 
+
     // Determine what needs to be done with the request message.
     void process_request() {
         std::cout << "uri:" << request_.target() << std::endl;
@@ -114,17 +116,16 @@ private:
                     beast::ostream(response_.body()) << err;
                 }
 
+                beast::ostream(response_.body()) << resp_json;
                 break;
             }
 
             default:
-                response_.result(http::status::bad_request);
-                resp_json["rc"] = UNSUPPORTED_HTTP_METHOD;
-                resp_json["err_message"] = std::string("unsupported http request, must post request");
+                response_.set(boost::beast::http::field::content_type, "text/html");
+                beast::ostream(response_.body()) << help_message;
                 break;
         }
 
-        beast::ostream(response_.body()) << resp_json;
         write_response();
     }
 
