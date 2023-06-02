@@ -1,4 +1,12 @@
 # evm server
+- based on [evmc](https://github.com/ethereum/evmc) and [evmone](https://github.com/ethereum/evmone)
+- add http server to handle evm request
+
+# todos
+- [ ] persistent store
+- [ ] state query
+- [ ] state root hash
+- [ ] more parameters for evm call, like max_gas, evm_version...
 
 # compile
 test on mac(m1) osx and ubuntu 20.04LTS
